@@ -1,3 +1,4 @@
+pub mod attestation_ca;
 pub mod audit;
 pub mod config;
 pub mod ctaphid;
@@ -151,6 +152,23 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     let aes_key = load_or_create_seal_key(&tpm, &seal_blob_path).await?;
     tracing::info!("Seal key ready");
 
+    // Load attestation state (optional — self-attestation if not set up)
+    let attestation = match attestation_ca::load(&data_dir) {
+        Ok(Some(att)) => {
+            tracing::info!("Attestation CA loaded (full packed attestation enabled)");
+            Some(std::sync::Arc::new(att))
+        }
+        Ok(None) => {
+            tracing::info!("No attestation CA found — using self-attestation");
+            tracing::info!("Run 'vauth setup-attestation' to enable full attestation");
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load attestation: {e} — using self-attestation");
+            None
+        }
+    };
+
     let creds_dir = data_dir.join("credentials");
     std::fs::create_dir_all(&creds_dir)?;
     let store = std::sync::Arc::new(std::sync::Mutex::new(
@@ -172,6 +190,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         cfg.pam_service,
         lockout,
         uv_cache,
+        attestation,
         audit,
     )
     .await;

@@ -10,6 +10,7 @@ use crate::ctap2;
 use crate::store::CredentialStore;
 use crate::tpm::TpmContext;
 use crate::up::LockoutTracker;
+use crate::attestation_ca::AttestationState;
 use crate::up::UvCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,6 +30,7 @@ pub async fn run_ctaphid_loop(
     pam_service: String,
     lockout: Arc<LockoutTracker>,
     uv_cache: Arc<UvCache>,
+    attestation: Option<Arc<AttestationState>>,
     audit: Arc<AuditLog>,
 ) {
     let mut manager = ChannelManager::new(MAX_CHANNELS);
@@ -66,12 +68,13 @@ pub async fn run_ctaphid_loop(
                     let pam_svc = pam_service.clone();
                     let lockout2 = Arc::clone(&lockout);
                     let uv_cache2 = Arc::clone(&uv_cache);
+                    let att2 = attestation.clone();
                     let audit2 = Arc::clone(&audit);
                     let cid = msg.cid;
                     tokio::spawn(async move {
                         let response = ctap2::dispatch_cbor(
                             msg, &tpm2, &store2, nv_index, &pam_svc,
-                            &lockout2, &uv_cache2, &audit2, &tx, &cancel2,
+                            &lockout2, &uv_cache2, att2.as_ref(), &audit2, &tx, &cancel2,
                         )
                         .await;
                         for pkt in encode_response(cid, CMD_CBOR, &response) {

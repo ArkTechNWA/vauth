@@ -54,6 +54,7 @@ async fn run_loop_and_get_response(tpm: vauth::tpm::TpmContext, payload: &[u8]) 
         "vauth".to_string(),
         std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
+        None,
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
 

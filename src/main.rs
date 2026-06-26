@@ -42,6 +42,8 @@ enum Command {
     },
     /// Delete all credentials and reset the TPM NV counter
     Wipe,
+    /// Set up attestation CA and device certificate
+    SetupAttestation,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -92,6 +94,7 @@ fn main() -> anyhow::Result<()> {
                 .build()?
                 .block_on(vauth::wipe(cfg))
         }
+        Command::SetupAttestation => cmd_setup_attestation(&cli.tpm_device),
         Command::List => cmd_list(&cli.tpm_device),
         Command::Info { id } => cmd_info(&cli.tpm_device, &id),
         Command::Revoke { id } => cmd_revoke(&cli.tpm_device, &id),
@@ -236,5 +239,26 @@ fn cmd_revoke(tpm_device: &str, id: &str) -> anyhow::Result<()> {
 
     store.remove(&full_id)?;
     println!("\nCredential revoked.");
+    Ok(())
+}
+
+fn cmd_setup_attestation(tpm_device: &str) -> anyhow::Result<()> {
+    let data_dir = vauth::data_dir()?;
+    std::fs::create_dir_all(&data_dir)?;
+
+    if vauth::attestation_ca::is_initialized(&data_dir) {
+        println!("Attestation already initialized.");
+        println!("To regenerate, delete the files in {}:", data_dir.display());
+        println!("  attestation_ca.pem, attestation_ca.key.pem");
+        println!("  attestation_device.pem, attestation_device.key.pem");
+        return Ok(());
+    }
+
+    println!("Setting up attestation CA and device certificate...");
+    vauth::attestation_ca::setup(&data_dir, &vauth::config::AAGUID)?;
+    println!("\nAttestation ready. The CA cert can be imported into Authentik");
+    println!("to enforce \"only vauth\" credentials.");
+    println!("\nCopy the CA cert for Authentik:");
+    println!("  {}/attestation_ca.pem", data_dir.display());
     Ok(())
 }

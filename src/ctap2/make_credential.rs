@@ -11,6 +11,7 @@ use crate::audit::AuditLog;
 use crate::store::{CredentialRecord, CredentialStore};
 use crate::tpm::{self, TpmContext};
 use crate::up::LockoutTracker;
+use crate::attestation_ca::AttestationState;
 use crate::up::UvCache;
 
 #[allow(clippy::too_many_arguments)]
@@ -22,6 +23,7 @@ pub(crate) async fn handle_make_credential(
     pam_service: &str,
     lockout: &Arc<LockoutTracker>,
     uv_cache: &Arc<UvCache>,
+    attestation: Option<&Arc<AttestationState>>,
     audit: &Arc<AuditLog>,
     cid: u32,
     outgoing_tx: &mpsc::Sender<[u8; 64]>,
@@ -141,7 +143,19 @@ pub(crate) async fn handle_make_credential(
     tracing::info!(cred_id = cred_id_hex, "Credential stored");
 
     // 7. Build attestation object
-    let response_cbor = build_attestation_object(&auth_data, &der_sig)?;
+    let (att_sig, x5c) = if let Some(att) = attestation {
+        // Full packed attestation: sign with the attestation key, include cert chain
+        let mut to_sign_att = auth_data.clone();
+        to_sign_att.extend_from_slice(&req.client_data_hash);
+        let att_sig_der = att.sign(&to_sign_att)
+            .map_err(|e| Ctap2Error::Cbor(format!("attestation sign: {e}")))?;
+        let certs = vec![att.device_cert_der.clone(), att.ca_cert_der.clone()];
+        (att_sig_der, Some(certs))
+    } else {
+        // Self-attestation: use the credential key's signature (already computed)
+        (der_sig.clone(), None)
+    };
+    let response_cbor = build_attestation_object(&auth_data, &att_sig, x5c.as_ref().map(|v| v.as_slice()))?;
 
     // 8. Return 0x00 + CBOR
     let mut response = vec![0x00u8];
