@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub(crate) struct UpPrompt {
     pub title: String,
     pub description: String,

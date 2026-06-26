@@ -18,6 +18,8 @@ pub(crate) enum Ctap2Error {
     UserActionTimeout,
     #[error("keepalive cancel")]
     KeepaliveCancel,
+    #[error("PIN auth blocked")]
+    PinAuthBlocked,
     #[error("no credentials")]
     NoCredentials,
     #[error("invalid length")]
@@ -39,6 +41,7 @@ impl Ctap2Error {
             Self::OperationDenied => 0x27,
             Self::UserActionTimeout => 0x2A,
             Self::KeepaliveCancel => 0x2D,
+            Self::PinAuthBlocked => 0x34,
             Self::NoCredentials => 0x2E,
             Self::InvalidLength => 0x03,
             Self::Cbor(_) => 0x11,

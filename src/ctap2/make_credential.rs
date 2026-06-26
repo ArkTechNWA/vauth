@@ -7,8 +7,11 @@ use tokio::sync::mpsc;
 use super::attestation::build_attestation_object;
 use super::authenticator_data::{build_make_cred_auth_data, encode_der_ecdsa};
 use super::types::{Ctap2Error, MakeCredentialRequest};
+use crate::audit::AuditLog;
 use crate::store::{CredentialRecord, CredentialStore};
 use crate::tpm::{self, TpmContext};
+use crate::up::LockoutTracker;
+use crate::up::UvCache;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_make_credential(
@@ -16,7 +19,10 @@ pub(crate) async fn handle_make_credential(
     tpm: &TpmContext,
     store: &Arc<Mutex<CredentialStore>>,
     _nv_index: u32,
-    pinentry_bin: &str,
+    pam_service: &str,
+    lockout: &Arc<LockoutTracker>,
+    uv_cache: &Arc<UvCache>,
+    audit: &Arc<AuditLog>,
     cid: u32,
     outgoing_tx: &mpsc::Sender<[u8; 64]>,
     cancel: &Arc<AtomicBool>,
@@ -39,16 +45,39 @@ pub(crate) async fn handle_make_credential(
         }
     }
 
-    // 3. User presence
-    let prompt = crate::up::make_credential_prompt(
-        &req.rp_id,
-        req.rp_name.as_deref(),
-        req.user_display.as_deref(),
-        req.user_name.as_deref(),
-    );
-    let proof =
-        crate::up::require_user_presence(&prompt, pinentry_bin, outgoing_tx, cid, cancel).await?;
-    tracing::info!(cid = format!("{cid:#010x}"), "User presence confirmed");
+    // 3. User verification — check cache first, then PAM
+    let proof = if uv_cache.consume(cid, &req.rp_id) {
+        audit.log_make_credential(
+            &req.rp_id, req.user_name.as_deref(), true, None, None,
+        );
+        crate::up::UserPresenceProof::test_only()
+    } else {
+        let prompt = crate::up::make_credential_prompt(
+            &req.rp_id,
+            req.rp_name.as_deref(),
+            req.user_display.as_deref(),
+            req.user_name.as_deref(),
+        );
+        match crate::up::require_user_verification(
+            &prompt, pam_service, lockout, outgoing_tx, cid, cancel,
+        ).await {
+            Ok(p) => {
+                audit.log_make_credential(
+                    &req.rp_id, req.user_name.as_deref(), true, None, None,
+                );
+                uv_cache.store(cid, &req.rp_id);
+                p
+            }
+            Err(e) => {
+                audit.log_make_credential(
+                    &req.rp_id, req.user_name.as_deref(), false, None,
+                    Some(&format!("{e}")),
+                );
+                return Err(e);
+            }
+        }
+    };
+    tracing::info!(cid = format!("{cid:#010x}"), "User verification confirmed");
 
     // 4. Generate credential ID
     let cred_id: [u8; 32] = rand::thread_rng().r#gen();
@@ -89,11 +118,11 @@ pub(crate) async fn handle_make_credential(
     let record = CredentialRecord {
         version: 1,
         credential_id: cred_id.to_vec(),
-        rp_id: req.rp_id,
+        rp_id: req.rp_id.clone(),
         rp_id_hash: rp_id_hash.to_vec(),
         rp_name: req.rp_name,
         user_id: req.user_id,
-        user_name: req.user_name,
+        user_name: req.user_name.clone(),
         user_display: req.user_display,
         public_key_x: x.to_vec(),
         public_key_y: y.to_vec(),
@@ -104,6 +133,11 @@ pub(crate) async fn handle_make_credential(
     };
 
     store.lock().unwrap().add(record)?;
+
+    audit.log_make_credential(
+        &req.rp_id, req.user_name.as_deref(), true,
+        Some(&cred_id_hex), None,
+    );
     tracing::info!(cred_id = cred_id_hex, "Credential stored");
 
     // 7. Build attestation object

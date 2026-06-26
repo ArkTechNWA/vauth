@@ -12,8 +12,18 @@ pub struct Config {
     pub tpm_device: String,
     #[arg(long, default_value = "0x01800100")]
     pub nv_index: String,
-    #[arg(long, default_value = "pinentry")]
-    pub pinentry: String,
+    /// PAM service name for user verification (maps to /etc/pam.d/<name>).
+    #[arg(long, default_value = "vauth")]
+    pub pam_service: String,
+    /// Path to the JSON-lines audit log file.
+    #[arg(long, default_value = "/var/log/vauth/audit.jsonl")]
+    pub audit_log: String,
+    /// Maximum consecutive UV failures before lockout.
+    #[arg(long, default_value = "5")]
+    pub max_uv_failures: u32,
+    /// Lockout duration in seconds after max failures.
+    #[arg(long, default_value = "300")]
+    pub lockout_secs: u64,
     /// Delete all stored credentials and reset the TPM NV counter, then exit.
     #[arg(long)]
     pub wipe: bool,

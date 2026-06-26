@@ -4,10 +4,13 @@ use super::{
     packet::{Packet, encode_error, encode_response, parse_packet},
     types::*,
 };
+use crate::audit::AuditLog;
 use crate::config::MAX_CHANNELS;
 use crate::ctap2;
 use crate::store::CredentialStore;
 use crate::tpm::TpmContext;
+use crate::up::LockoutTracker;
+use crate::up::UvCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -23,7 +26,10 @@ pub async fn run_ctaphid_loop(
     tpm: TpmContext,
     store: Arc<Mutex<CredentialStore>>,
     nv_index: u32,
-    pinentry_bin: String,
+    pam_service: String,
+    lockout: Arc<LockoutTracker>,
+    uv_cache: Arc<UvCache>,
+    audit: Arc<AuditLog>,
 ) {
     let mut manager = ChannelManager::new(MAX_CHANNELS);
     let cancel = Arc::new(AtomicBool::new(false));
@@ -57,11 +63,15 @@ pub async fn run_ctaphid_loop(
                     let store2 = Arc::clone(&store);
                     let cancel2 = Arc::clone(&cancel);
                     let busy2 = Arc::clone(&cbor_busy);
-                    let pin_bin = pinentry_bin.clone();
+                    let pam_svc = pam_service.clone();
+                    let lockout2 = Arc::clone(&lockout);
+                    let uv_cache2 = Arc::clone(&uv_cache);
+                    let audit2 = Arc::clone(&audit);
                     let cid = msg.cid;
                     tokio::spawn(async move {
                         let response = ctap2::dispatch_cbor(
-                            msg, &tpm2, &store2, nv_index, &pin_bin, &tx, &cancel2,
+                            msg, &tpm2, &store2, nv_index, &pam_svc,
+                            &lockout2, &uv_cache2, &audit2, &tx, &cancel2,
                         )
                         .await;
                         for pkt in encode_response(cid, CMD_CBOR, &response) {

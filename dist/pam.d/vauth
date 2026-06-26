@@ -1,0 +1,8 @@
+# PAM service for vauth (virtual CTAP2 authenticator)
+# User verification: face (howdy) → password fallback
+
+# Face recognition via howdy
+auth    sufficient    pam_python.so /lib/security/howdy/pam.py
+
+# Password fallback
+auth    required      pam_unix.so nullok

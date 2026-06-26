@@ -6,8 +6,11 @@ use tokio::sync::mpsc;
 
 use super::authenticator_data::{build_get_assertion_auth_data, encode_der_ecdsa};
 use super::types::{Ctap2Error, GetAssertionRequest};
+use crate::audit::AuditLog;
 use crate::store::{CredentialRecord, CredentialStore};
 use crate::tpm::{self, TpmContext};
+use crate::up::LockoutTracker;
+use crate::up::UvCache;
 
 fn select_credential(
     store: &CredentialStore,
@@ -36,7 +39,10 @@ pub(crate) async fn handle_get_assertion(
     tpm: &TpmContext,
     store: &Arc<Mutex<CredentialStore>>,
     nv_index: u32,
-    pinentry_bin: &str,
+    pam_service: &str,
+    lockout: &Arc<LockoutTracker>,
+    uv_cache: &Arc<UvCache>,
+    audit: &Arc<AuditLog>,
     cid: u32,
     outgoing_tx: &mpsc::Sender<[u8; 64]>,
     cancel: &Arc<AtomicBool>,
@@ -52,15 +58,34 @@ pub(crate) async fn handle_get_assertion(
         }
     };
 
-    // User presence
-    let prompt = crate::up::get_assertion_prompt(
-        &req.rp_id,
-        cred.user_display.as_deref(),
-        cred.user_name.as_deref(),
-    );
-    let proof =
-        crate::up::require_user_presence(&prompt, pinentry_bin, outgoing_tx, cid, cancel).await?;
-    tracing::info!(cid = format!("{cid:#010x}"), "User presence confirmed");
+    let cred_id_hex: String = cred.credential_id.iter().map(|b| format!("{b:02x}")).collect();
+
+    // User verification — check cache first, then PAM
+    let proof = if uv_cache.consume(cid, &req.rp_id) {
+        crate::up::UserPresenceProof::test_only()
+    } else {
+        let prompt = crate::up::get_assertion_prompt(
+            &req.rp_id,
+            cred.user_display.as_deref(),
+            cred.user_name.as_deref(),
+        );
+        match crate::up::require_user_verification(
+            &prompt, pam_service, lockout, outgoing_tx, cid, cancel,
+        ).await {
+            Ok(p) => {
+                uv_cache.store(cid, &req.rp_id);
+                p
+            }
+            Err(e) => {
+                audit.log_get_assertion(
+                    &req.rp_id, cred.user_name.as_deref(), false,
+                    Some(&cred_id_hex), None, Some(&format!("{e}")),
+                );
+                return Err(e);
+            }
+        }
+    };
+    tracing::info!(cid = format!("{cid:#010x}"), "User verification confirmed");
 
     // TPM operations
     let tpm2 = tpm.clone();
@@ -70,7 +95,7 @@ pub(crate) async fn handle_get_assertion(
     let key_public = cred.key_public.clone();
     let cred_id = cred.credential_id.clone();
 
-    let (auth_data, der_sig) = tokio::task::spawn_blocking(move || {
+    let (auth_data, der_sig, counter) = tokio::task::spawn_blocking(move || {
         tpm2.with_ctx(|ctx, primary| {
             let counter = tpm::counter::increment_and_read(ctx, nv_index)?;
             tracing::info!(count = counter, "Counter incremented");
@@ -81,11 +106,16 @@ pub(crate) async fn handle_get_assertion(
             let raw_sig = tpm::keys::sign(ctx, handle, &to_sign, &proof)?;
             tpm::keys::flush(ctx, handle)?;
             let der_sig = encode_der_ecdsa(&raw_sig);
-            Ok((auth_data, der_sig))
+            Ok((auth_data, der_sig, counter))
         })
     })
     .await
     .map_err(|e| Ctap2Error::Tpm(tpm::TpmError::Other(e.to_string())))??;
+
+    audit.log_get_assertion(
+        &req.rp_id, cred.user_name.as_deref(), true,
+        Some(&cred_id_hex), Some(counter), None,
+    );
 
     // Build response
     let mut entries = vec![
@@ -103,7 +133,6 @@ pub(crate) async fn handle_get_assertion(
         (Value::Integer(3i64.into()), Value::Bytes(der_sig)),
     ];
 
-    // Key 0x04: user entity — required by spec for resident/discoverable credentials
     if cred.discoverable {
         let mut user_map = vec![(
             Value::Text("id".to_string()),
@@ -167,8 +196,6 @@ mod tests {
     fn test_select_credential_skips_non_discoverable_without_allow_list() {
         let rp_hash = [0x11u8; 32];
         let (mut store, _tmp) = make_store();
-
-        // Newer non-discoverable credential should not be returned in discoverable flow.
         store.add(make_record(1, rp_hash, false, 200)).unwrap();
         store.add(make_record(2, rp_hash, true, 100)).unwrap();
 

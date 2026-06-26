@@ -8,8 +8,7 @@ pub fn check(cfg: &Config) -> anyhow::Result<()> {
         Ok(_) => {}
         Err(e) => errors.push(format!(
             "cannot open /dev/uhid: {e}\n  \
-             → add yourself to the 'input' group: sudo usermod -aG input $USER\n  \
-             → or install the udev rule: dist/99-fidorium.rules"
+             → run as root or add a udev rule for uhid access"
         )),
     }
 
@@ -23,17 +22,13 @@ pub fn check(cfg: &Config) -> anyhow::Result<()> {
         )),
     }
 
-    // Check 3: pinentry binary found
-    match std::process::Command::new(&cfg.pinentry)
-        .arg("--version")
-        .output()
-    {
-        Ok(_) => {}
-        Err(e) => errors.push(format!(
-            "pinentry binary not found: '{}': {e}\n  \
-             → install pinentry: emerge app-crypt/pinentry",
-            cfg.pinentry
-        )),
+    // Check 3: PAM service file exists
+    let pam_path = format!("/etc/pam.d/{}", cfg.pam_service);
+    if !std::path::Path::new(&pam_path).exists() {
+        errors.push(format!(
+            "PAM service file not found: {pam_path}\n  \
+             → install it: sudo cp dist/pam.d/vauth /etc/pam.d/"
+        ));
     }
 
     if errors.is_empty() {

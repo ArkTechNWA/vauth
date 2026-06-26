@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod config;
 pub mod ctaphid;
 pub mod diagnostics;
@@ -7,7 +8,7 @@ pub mod hid;
 pub(crate) mod ctap2;
 pub mod store;
 pub mod tpm;
-pub(crate) mod up;
+pub mod up;
 
 pub use up::UserPresenceProof;
 
@@ -15,7 +16,6 @@ pub async fn wipe(cfg: config::Config) -> anyhow::Result<()> {
     let nv_index = u32::from_str_radix(cfg.nv_index.trim_start_matches("0x"), 16)
         .map_err(|e| anyhow::anyhow!("invalid --nv-index: {e}"))?;
 
-    // Delete credentials
     let data_dir = directories::ProjectDirs::from("", "", "fidorium")
         .ok_or_else(|| anyhow::anyhow!("cannot determine XDG data dir"))?
         .data_dir()
@@ -30,7 +30,6 @@ pub async fn wipe(cfg: config::Config) -> anyhow::Result<()> {
     }
     println!("Deleted {count} credential(s) from {}", creds_dir.display());
 
-    // Delete NV counter
     let tpm = tpm::TpmContext::new(&cfg.tpm_device)
         .map_err(|e| anyhow::anyhow!("Failed to initialize TPM: {e}"))?;
     let tpm2 = tpm.clone();
@@ -60,6 +59,22 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     // Preflight checks
     diagnostics::check(&cfg)?;
 
+    // Initialize audit log
+    let audit_path = std::path::Path::new(&cfg.audit_log);
+    let audit = std::sync::Arc::new(
+        audit::AuditLog::open(audit_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open audit log {}: {e}", cfg.audit_log))?,
+    );
+    tracing::info!(path = %cfg.audit_log, "Audit log ready");
+
+    // Initialize lockout tracker
+    let lockout = std::sync::Arc::new(
+        up::LockoutTracker::new(cfg.max_uv_failures, cfg.lockout_secs),
+    );
+
+    // Initialize UV cache (use-once, 10s TTL, source-bound)
+    let uv_cache = std::sync::Arc::new(up::UvCache::new(10));
+
     // Compute data dir early (needed for lock fallback)
     let data_dir = directories::ProjectDirs::from("", "", "fidorium")
         .ok_or_else(|| anyhow::anyhow!("cannot determine XDG data dir"))?
@@ -85,16 +100,13 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         )
     })?;
 
-    // Parse NV index from hex string e.g. "0x01800100"
     let nv_index = u32::from_str_radix(cfg.nv_index.trim_start_matches("0x"), 16)
         .map_err(|e| anyhow::anyhow!("invalid --nv-index: {e}"))?;
 
-    // Create TPM context and primary key
     let tpm = tpm::TpmContext::new(&cfg.tpm_device)
         .map_err(|e| anyhow::anyhow!("Failed to initialize TPM: {e}"))?;
     tracing::info!("TPM context initialized");
 
-    // Ensure NV counter exists
     {
         let tpm2 = tpm.clone();
         tokio::task::spawn_blocking(move || {
@@ -104,12 +116,10 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     }
     tracing::info!(index = format!("{nv_index:#010x}"), "NV counter ready");
 
-    // Load or create seal key
     let seal_blob_path = data_dir.join("seal_key.blob");
     let aes_key = load_or_create_seal_key(&tpm, &seal_blob_path).await?;
     tracing::info!("Seal key ready");
 
-    // Initialize credential store
     let creds_dir = data_dir.join("credentials");
     std::fs::create_dir_all(&creds_dir)?;
     let store = std::sync::Arc::new(std::sync::Mutex::new(
@@ -128,7 +138,10 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         tpm,
         store,
         nv_index,
-        cfg.pinentry,
+        cfg.pam_service,
+        lockout,
+        uv_cache,
+        audit,
     )
     .await;
     match transport.task.await {

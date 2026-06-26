@@ -1,4 +1,6 @@
 use ciborium::value::Value;
+use fidorium::audit::AuditLog;
+use fidorium::up::UvCache;
 use fidorium::ctaphid::{run_ctaphid_loop, types::*};
 use fidorium::store::CredentialStore;
 use std::sync::{Arc, Mutex};
@@ -49,7 +51,10 @@ async fn run_loop_and_get_response(tpm: fidorium::tpm::TpmContext, payload: &[u8
         tpm,
         store,
         0x01800100,
-        "pinentry".to_string(),
+        "vauth".to_string(),
+        std::sync::Arc::new(fidorium::up::LockoutTracker::new(5, 300)),
+        std::sync::Arc::new(UvCache::new(10)),
+        std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
 
     // Allocate a channel with INIT
