@@ -1,0 +1,2 @@
+# Allow input group to access UHID (for vauth virtual authenticator)
+KERNEL=="uhid", GROUP="input", MODE="0660"

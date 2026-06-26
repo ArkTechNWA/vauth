@@ -40,6 +40,7 @@ chrono     = { version = "0.4", features = ["serde"] }
 base64     = "0.22"
 p256       = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 ecdsa      = { version = "0.16", features = ["signing", "der"] }
+caps       = "0.5"
 libc       = "0.2"
 time       = "0.3"
 rcgen      = { version = "0.14", features = ["x509-parser"] }

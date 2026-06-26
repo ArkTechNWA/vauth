@@ -1,5 +1,6 @@
 pub mod attestation_ca;
 pub mod audit;
+pub mod privsep;
 pub mod config;
 pub mod ctaphid;
 pub mod diagnostics;
@@ -179,6 +180,10 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         count = store.lock().unwrap().credential_count(),
         "Credential store loaded"
     );
+
+    // All privileged initialization done. Drop to real user before spawning threads.
+    // uhid is now accessible via udev rule (group=input), TPM FDs stay open.
+    privsep::drop_privileges()?;
 
     let transport = hid::start_hid_transport()?;
     ctaphid::run_ctaphid_loop(
