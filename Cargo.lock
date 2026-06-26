@@ -1511,9 +1511,9 @@ dependencies = [
 
 [[package]]
 name = "target-lexicon"
-version = "0.13.5"
+version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tempfile"
@@ -1696,9 +1696,9 @@ dependencies = [
 
 [[package]]
 name = "tss-esapi"
-version = "8.0.0-alpha.1"
+version = "8.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ae0a3ff277e5889c8693236007806f5d56028e107ba35e182e3be5f8430a7d6"
+checksum = "5c1751ea94b699404cd8c52fe2f1cb6ba811b8a7d26151298b946b3b8424468e"
 dependencies = [
  "bitfield",
  "cfg-if",
@@ -1724,13 +1724,11 @@ dependencies = [
 
 [[package]]
 name = "tss-esapi-sys"
-version = "0.6.0-alpha.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a103a00a0f7a9ac894d1f4203d0e34440c929eed692ede0bc62f7de9d839fdc"
+checksum = "a7f972672926a3d3d18ecc04524720e4d20b7d1664a3fb73dbf7d4274196dbd9"
 dependencies = [
- "cfg-if",
  "pkg-config",
- "semver",
  "target-lexicon",
 ]
 
@@ -1802,7 +1800,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vauth"
-version = "0.1.6"
+version = "0.1.0-alpha"
 dependencies = [
  "aes-gcm",
  "anyhow",
