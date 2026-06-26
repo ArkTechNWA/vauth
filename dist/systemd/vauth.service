@@ -5,16 +5,21 @@ Wants=tpm2-abrmd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vauth run --audit-log /var/log/vauth/audit.jsonl
+
+# Set YOUR username here:
+ExecStart=/usr/local/bin/vauth run --run-as-user meldrey --audit-log /var/log/vauth/audit.jsonl
+
 Restart=on-failure
 RestartSec=3
+
+# Security hardening
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=no
 ReadWritePaths=/var/log/vauth
+ReadWritePaths=/home/meldrey/.local/share/fidorium
 PrivateTmp=yes
 
-# vauth drops privileges internally (root → real user)
-# after TPM + uhid initialization.
+# vauth drops privileges internally after TPM + uhid init.
 
 [Install]
 WantedBy=multi-user.target

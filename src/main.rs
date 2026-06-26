@@ -19,6 +19,9 @@ struct Cli {
 enum Command {
     /// Start the authenticator daemon (default if no subcommand given)
     Run {
+        /// User to drop privileges to (default: SUDO_USER env var)
+        #[arg(long)]
+        run_as_user: Option<String>,
         #[arg(long, default_value = "vauth")]
         pam_service: String,
         #[arg(long, default_value = "/var/log/vauth/audit.jsonl")]
@@ -50,6 +53,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let command = cli.command.unwrap_or(Command::Run {
+        run_as_user: None,
         pam_service: "vauth".to_string(),
         audit_log: "/var/log/vauth/audit.jsonl".to_string(),
         max_uv_failures: 5,
@@ -58,11 +62,16 @@ fn main() -> anyhow::Result<()> {
 
     match command {
         Command::Run {
+            run_as_user,
             pam_service,
             audit_log,
             max_uv_failures,
             lockout_secs,
         } => {
+            if let Some(user) = run_as_user {
+                // SAFETY: single-threaded at this point
+                unsafe { std::env::set_var("SUDO_USER", &user) };
+            }
             let cfg = vauth::config::Config {
                 verbose: cli.verbose,
                 tpm_device: cli.tpm_device,
