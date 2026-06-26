@@ -12,14 +12,48 @@ pub mod up;
 
 pub use up::UserPresenceProof;
 
+/// Resolve the data directory using the real user's HOME, even under sudo.
+pub fn data_dir() -> anyhow::Result<std::path::PathBuf> {
+    // If running under sudo, use the real user's home
+    let home = if let Ok(sudo_user) = std::env::var("SUDO_USER") {
+        if !sudo_user.is_empty() && sudo_user != "root" {
+            // Look up the user's home directory
+            let pw = unsafe {
+                let user_cstr = std::ffi::CString::new(sudo_user.as_str()).unwrap();
+                libc::getpwnam(user_cstr.as_ptr())
+            };
+            if !pw.is_null() {
+                let home_dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) }
+                    .to_string_lossy()
+                    .into_owned();
+                Some(std::path::PathBuf::from(home_dir))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let data_dir = if let Some(home) = home {
+        home.join(".local/share/fidorium")
+    } else {
+        directories::ProjectDirs::from("", "", "fidorium")
+            .ok_or_else(|| anyhow::anyhow!("cannot determine XDG data dir"))?
+            .data_dir()
+            .to_path_buf()
+    };
+
+    Ok(data_dir)
+}
+
 pub async fn wipe(cfg: config::Config) -> anyhow::Result<()> {
     let nv_index = u32::from_str_radix(cfg.nv_index.trim_start_matches("0x"), 16)
         .map_err(|e| anyhow::anyhow!("invalid --nv-index: {e}"))?;
 
-    let data_dir = directories::ProjectDirs::from("", "", "fidorium")
-        .ok_or_else(|| anyhow::anyhow!("cannot determine XDG data dir"))?
-        .data_dir()
-        .to_path_buf();
+    let data_dir = data_dir()?;
     let creds_dir = data_dir.join("credentials");
     let mut count = 0usize;
     if creds_dir.exists() {
@@ -76,10 +110,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     let uv_cache = std::sync::Arc::new(up::UvCache::new(10));
 
     // Compute data dir early (needed for lock fallback)
-    let data_dir = directories::ProjectDirs::from("", "", "fidorium")
-        .ok_or_else(|| anyhow::anyhow!("cannot determine XDG data dir"))?
-        .data_dir()
-        .to_path_buf();
+    let data_dir = data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
 
     // Single-instance lock

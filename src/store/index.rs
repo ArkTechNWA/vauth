@@ -104,6 +104,13 @@ impl CredentialStore {
         }
     }
 
+    /// Return all credentials, sorted by created_at descending.
+    pub fn all(&self) -> Vec<&CredentialRecord> {
+        let mut records: Vec<&CredentialRecord> = self.by_id.values().collect();
+        records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        records
+    }
+
     pub fn credential_count(&self) -> usize {
         self.by_id.len()
     }

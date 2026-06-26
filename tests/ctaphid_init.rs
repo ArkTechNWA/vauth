@@ -1,7 +1,7 @@
-use fidorium::audit::AuditLog;
-use fidorium::up::UvCache;
-use fidorium::ctaphid::{run_ctaphid_loop, types::*};
-use fidorium::store::CredentialStore;
+use vauth::audit::AuditLog;
+use vauth::up::UvCache;
+use vauth::ctaphid::{run_ctaphid_loop, types::*};
+use vauth::store::CredentialStore;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -21,10 +21,10 @@ fn make_init_packet(cid: u32, cmd: u8, payload: &[u8]) -> [u8; 64] {
 
 /// Try to create a TpmContext for integration tests.
 /// Returns None if the TPM is not accessible (test should be skipped).
-fn try_make_tpm() -> Option<fidorium::tpm::TpmContext> {
+fn try_make_tpm() -> Option<vauth::tpm::TpmContext> {
     let tcti = std::env::var("FIDORIUM_TEST_TCTI").unwrap_or_else(|_| "device:/dev/tpmrm0".into());
     let device = tcti.trim_start_matches("device:");
-    fidorium::tpm::TpmContext::new(device).ok()
+    vauth::tpm::TpmContext::new(device).ok()
 }
 
 fn make_store(tmp: &TempDir) -> Arc<Mutex<CredentialStore>> {
@@ -54,7 +54,7 @@ async fn test_ctaphid_init_returns_cid() {
         store,
         0x01800100,
         "vauth".to_string(),
-        std::sync::Arc::new(fidorium::up::LockoutTracker::new(5, 300)),
+        std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
@@ -124,7 +124,7 @@ async fn test_ctaphid_ping_echo() {
         store,
         0x01800100,
         "vauth".to_string(),
-        std::sync::Arc::new(fidorium::up::LockoutTracker::new(5, 300)),
+        std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
@@ -185,7 +185,7 @@ async fn test_ctaphid_invalid_cmd_returns_error() {
         store,
         0x01800100,
         "vauth".to_string(),
-        std::sync::Arc::new(fidorium::up::LockoutTracker::new(5, 300)),
+        std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));

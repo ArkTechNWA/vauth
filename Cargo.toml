@@ -1,5 +1,5 @@
 [package]
-name = "fidorium"
+name = "vauth"
 version = "0.1.6"
 edition = "2024"
 description = "A FIDO2/CTAP2 authenticator daemon for Linux backed by TPM 2.0"
@@ -12,11 +12,11 @@ categories = ["authentication", "cryptography", "command-line-utilities", "os::l
 keywords = ["fido2", "ctap2", "webauthn", "tpm2", "linux"]
 
 [lib]
-name = "fidorium"
+name = "vauth"
 path = "src/lib.rs"
 
 [[bin]]
-name = "fidorium"
+name = "vauth"
 path = "src/main.rs"
 
 [dependencies]

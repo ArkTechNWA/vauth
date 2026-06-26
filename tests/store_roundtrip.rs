@@ -1,4 +1,4 @@
-use fidorium::store::{CredentialRecord, CredentialStore};
+use vauth::store::{CredentialRecord, CredentialStore};
 
 fn make_record(
     rp_id: &str,

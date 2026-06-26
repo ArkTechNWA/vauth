@@ -1,4 +1,4 @@
-use fidorium::tpm;
+use vauth::tpm;
 
 fn test_tcti() -> Option<String> {
     let s = std::env::var("FIDORIUM_TEST_TCTI").unwrap_or_else(|_| "device:/dev/tpmrm0".into());
@@ -19,8 +19,8 @@ fn test_tcti() -> Option<String> {
     }
 }
 
-fn make_context(tcti: &str) -> fidorium::tpm::TpmContext {
-    fidorium::tpm::TpmContext::new(tcti.trim_start_matches("device:"))
+fn make_context(tcti: &str) -> vauth::tpm::TpmContext {
+    vauth::tpm::TpmContext::new(tcti.trim_start_matches("device:"))
         .expect("TpmContext::new should succeed")
 }
 
@@ -70,7 +70,7 @@ fn test_child_key_create_load_sign() {
         .with_ctx(tpm::keys::create_child_key)
         .expect("create child key");
 
-    let up = fidorium::UserPresenceProof::test_only();
+    let up = vauth::UserPresenceProof::test_only();
     let sig = ctx
         .with_ctx(|ctx, primary| {
             let key = tpm::keys::load_key(ctx, primary, &priv_bytes, &pub_bytes)?;

@@ -1,16 +1,16 @@
 use ciborium::value::Value;
-use fidorium::audit::AuditLog;
-use fidorium::up::UvCache;
-use fidorium::ctaphid::{run_ctaphid_loop, types::*};
-use fidorium::store::CredentialStore;
+use vauth::audit::AuditLog;
+use vauth::up::UvCache;
+use vauth::ctaphid::{run_ctaphid_loop, types::*};
+use vauth::store::CredentialStore;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
-fn try_make_tpm() -> Option<fidorium::tpm::TpmContext> {
+fn try_make_tpm() -> Option<vauth::tpm::TpmContext> {
     let tcti = std::env::var("FIDORIUM_TEST_TCTI").unwrap_or_else(|_| "device:/dev/tpmrm0".into());
-    fidorium::tpm::TpmContext::new(tcti.trim_start_matches("device:")).ok()
+    vauth::tpm::TpmContext::new(tcti.trim_start_matches("device:")).ok()
 }
 
 fn make_init_packet(cid: u32, cmd: u8, payload: &[u8]) -> [u8; 64] {
@@ -36,7 +36,7 @@ fn cbor_map_get(map: &[(Value, Value)], key: i64) -> Option<&Value> {
     })
 }
 
-async fn run_loop_and_get_response(tpm: fidorium::tpm::TpmContext, payload: &[u8]) -> Vec<u8> {
+async fn run_loop_and_get_response(tpm: vauth::tpm::TpmContext, payload: &[u8]) -> Vec<u8> {
     let tmp = TempDir::new().unwrap();
     let store = Arc::new(Mutex::new(
         CredentialStore::load([0u8; 32], tmp.path().to_path_buf()).unwrap(),
@@ -52,7 +52,7 @@ async fn run_loop_and_get_response(tpm: fidorium::tpm::TpmContext, payload: &[u8
         store,
         0x01800100,
         "vauth".to_string(),
-        std::sync::Arc::new(fidorium::up::LockoutTracker::new(5, 300)),
+        std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
@@ -166,7 +166,7 @@ async fn test_get_info_aaguid() {
     assert_eq!(aaguid.len(), 16, "AAGUID must be 16 bytes");
     assert_eq!(
         aaguid.as_slice(),
-        &fidorium::config::AAGUID,
+        &vauth::config::AAGUID,
         "AAGUID must match config"
     );
 }
