@@ -1,5 +1,8 @@
 # vauth
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ArkTechNWA/vauth/badge)](https://scorecard.dev/viewer/?uri=github.com/ArkTechNWA/vauth)
+
+
 A virtual CTAP2 authenticator for Linux with TPM 2.0-bound keys, biometric user verification, and enterprise attestation.
 
 vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a hardware authenticator — register and sign in with passkeys using your face or a password, backed by keys that never leave your TPM.
