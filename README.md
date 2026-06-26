@@ -1,107 +1,185 @@
-# fidorium
+# vauth
 
-[![crates.io](https://img.shields.io/crates/v/fidorium.svg)](https://crates.io/crates/fidorium)
-[![docs.rs](https://img.shields.io/docsrs/fidorium)](https://docs.rs/fidorium)
-[![license](https://img.shields.io/crates/l/fidorium.svg)](https://github.com/edg-l/fidorium#license)
-[![rust edition](https://img.shields.io/badge/rust-2024-edition.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
-[![platform](https://img.shields.io/badge/platform-linux-blue.svg)](https://www.kernel.org/)
+A virtual CTAP2 authenticator for Linux with TPM 2.0-bound keys, biometric user verification, and enterprise attestation.
 
-<p align="center"><img src="logo.svg" width="180" alt="fidorium logo"/></p>
+vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a hardware authenticator — register and sign in with passkeys using your face or a password, backed by keys that never leave your TPM.
 
-A FIDO2/CTAP2 authenticator daemon for Linux. It presents as a virtual USB HID authenticator via `/dev/uhid`, backed by TPM 2.0 for key storage. Supports passkey registration (MakeCredential) and authentication (GetAssertion). User presence is confirmed via a pinentry popup.
+## Features
+
+- **TPM 2.0-bound keys** — private keys generated inside and never exported from the TPM
+- **Face recognition** — howdy-based face auth via PAM, with password fallback (zenity dialog)
+- **Packed attestation** — self-signed CA with x5c certificate chain for enterprise enforcement
+- **Privilege separation** — drops from root to real user after init, retains only `CAP_DAC_READ_SEARCH`
+- **Audit logging** — single JSONL file, every operation logged with RP, user, result, counter
+- **UV caching** — (CID, RP ID)-bound, use-once, 10s TTL — no double-prompts, no attack window
+- **Lockout** — configurable failure threshold and cooldown
+- **Credential management** — `list`, `info`, `revoke`, `wipe` subcommands
+- **Monotonic counter** — TPM NV counter for clone detection
 
 ## Requirements
 
-- Linux
-- TPM 2.0 accessible at `/dev/tpmrm0` (resource manager device)
-- `/dev/uhid` for virtual HID device creation
-- `pinentry` binary in PATH (e.g. `pinentry-qt6`, `pinentry-gnome3`, `pinentry-curses`)
-- `libtss2-esys` / `tpm2-tss` system library (Gentoo: `app-crypt/tpm2-tss`)
-- Rust toolchain
+- Linux with kernel uhid support
+- TPM 2.0 (`/dev/tpmrm0`)
+- Rust 1.91+
+- `libpam` (PAM development headers)
+- `tpm2-tss` (TPM2 Software Stack)
 
-## Permissions
+### Optional
 
-**TPM device** — add your user to the `tss` group:
+- [howdy](https://github.com/boltgolt/howdy) — face recognition via PAM
+- `zenity` — GUI password dialog fallback
 
-```bash
-sudo usermod -aG tss $USER
-```
-
-**UHID device** — add your user to the `input` group, or add a udev rule:
-
-```
-KERNEL=="uhid", GROUP="input", MODE="0660"
-```
-
-Log out and back in after group changes.
-
-## Build
+## Building
 
 ```bash
-cargo build
-# or for a release build:
 cargo build --release
 ```
 
-## Run
+The binary is at `target/release/vauth`.
+
+## Setup
+
+### 1. Udev rule (uhid access)
 
 ```bash
-# Basic run
-cargo run
-
-# With GUI pinentry and debug logging
-cargo run -- -vv --pinentry pinentry-qt6
-
-# Wipe all stored credentials and reset the TPM NV counter, then exit
-cargo run -- --wipe
+sudo cp dist/udev/99-vauth.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger /dev/uhid
 ```
 
-The daemon runs in the foreground. Kill it with Ctrl-C to stop.
+Ensure your user is in the `input` group:
+```bash
+sudo usermod -aG input $USER
+```
 
-## CLI Options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-v`, `--verbose` | off | Increase log verbosity; use `-vv` for debug output |
-| `--tpm-device` | `/dev/tpmrm0` | TPM device path |
-| `--nv-index` | `0x01800100` | TPM NV counter index (hex) |
-| `--pinentry` | `pinentry` | pinentry binary name or path |
-| `--wipe` | — | Delete all credentials and reset NV counter, then exit |
-
-## Data Storage
-
-| Path | Contents |
-|------|----------|
-| `~/.local/share/fidorium/credentials/` | Encrypted credential blobs |
-| `~/.local/share/fidorium/seal_key.blob` | TPM-sealed AES encryption key |
-
-Credential files are AES-256-GCM encrypted with a key sealed to the TPM. They are useless without access to the same TPM.
-
-## How It Works
-
-1. At startup, fidorium creates a virtual FIDO2 HID device via `/dev/uhid`.
-2. **Registration (MakeCredential):** Generates a P-256 key under the TPM owner hierarchy, encrypts the key blob with a TPM-sealed AES key, stores it to disk, and shows a pinentry confirmation dialog for user presence.
-3. **Authentication (GetAssertion):** Loads the credential blob, increments the monotonic TPM NV counter, signs the assertion inside the TPM, and shows a pinentry confirmation dialog for user presence.
-
-Security properties:
-
-- Key material never leaves the TPM unencrypted.
-- The monotonic NV counter in TPM storage prevents cloning-detection rollback.
-- User presence confirmation is enforced at the type level (`UserPresenceProof`) — the signing path cannot be reached without pinentry approval.
-- No PIN or UV — user presence only (pinentry serves as the "tap to confirm" equivalent).
-
-## Testing
+### 2. PAM service
 
 ```bash
-# Run all tests (TPM tests skip automatically if no TPM is available)
-cargo test
-
-# Run TPM tests against a real device
-FIDORIUM_TEST_TCTI=device:/dev/tpmrm0 cargo test
+sudo cp dist/pam.d/vauth /etc/pam.d/
 ```
 
-Test coverage:
+Edit `/etc/pam.d/vauth` to match your system. The default config tries howdy (face), then falls back to password:
 
-- `tests/store_roundtrip.rs` — credential store read/write/remove
-- `tests/tpm_smoke.rs` — TPM key creation, signing, NV counter, seal/unseal
-- `tests/ctaphid_init.rs` — CTAPHID INIT/PING/error handling
+```
+auth    sufficient    pam_python.so /lib/security/howdy/pam.py
+auth    required      pam_unix.so nullok
+```
+
+### 3. Attestation (optional)
+
+Generate a self-signed attestation CA and device certificate:
+
+```bash
+sudo vauth setup-attestation
+```
+
+The CA cert can be imported into your identity provider (e.g., Authentik) to enforce "only vauth" credentials. The cert is at:
+```
+~/.local/share/fidorium/attestation_ca.pem
+```
+
+### 4. Systemd service (optional)
+
+```bash
+sudo cp dist/systemd/vauth.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vauth
+```
+
+## Usage
+
+### Run the daemon
+
+```bash
+sudo vauth run -vv --audit-log /var/log/vauth/audit.jsonl
+```
+
+The daemon starts as root (for TPM + uhid), then drops to your user. Open a browser, navigate to a WebAuthn-enabled site, and register a passkey.
+
+### Manage credentials
+
+```bash
+sudo vauth list                    # List all stored credentials
+sudo vauth info <id-prefix>        # Show credential details
+sudo vauth revoke <id-prefix>      # Delete a credential
+sudo vauth wipe                    # Delete everything + reset TPM counter
+```
+
+Credential IDs support prefix matching — `vauth info 8d94` matches `8d945861f3a4...`.
+
+### CLI reference
+
+```
+vauth [OPTIONS] [COMMAND]
+
+Commands:
+  run                  Start the authenticator daemon (default)
+  list                 List all stored credentials
+  info <ID>            Show details of a specific credential
+  revoke <ID>          Revoke (delete) a credential
+  wipe                 Delete all credentials and reset TPM NV counter
+  setup-attestation    Generate attestation CA and device certificate
+
+Options:
+  -v, --verbose        Increase log verbosity (use -vv for debug)
+  --tpm-device <PATH>  TPM device [default: /dev/tpmrm0]
+  --nv-index <HEX>     TPM NV counter index [default: 0x01800100]
+```
+
+### Run-specific options
+
+```
+vauth run [OPTIONS]
+
+Options:
+  --pam-service <NAME>       PAM service name [default: vauth]
+  --audit-log <PATH>         Audit log path [default: /var/log/vauth/audit.jsonl]
+  --max-uv-failures <N>      Failures before lockout [default: 5]
+  --lockout-secs <N>         Lockout duration [default: 300]
+```
+
+## Security
+
+See [THREAT_MODEL.md](THREAT_MODEL.md) for a detailed analysis of what vauth does and does not defend against.
+
+Key points:
+- Private keys never leave the TPM
+- Every signing operation requires fresh user verification
+- The daemon runs as an unprivileged user after initialization
+- A compromised local OS can bypass all protections — no software authenticator can prevent this
+
+## Architecture
+
+```
+Browser (WebAuthn JS API)
+    │ HID reports via /dev/uhid
+    ▼
+vauth daemon (unprivileged after init)
+    ├── CTAPHID framing + dispatch
+    ├── CTAP2 protocol (makeCredential, getAssertion, getInfo)
+    ├── PAM user verification (howdy face → password fallback)
+    ├── UV cache (CID+RP bound, use-once, TTL)
+    ├── Attestation signing (device cert + CA chain)
+    ├── Audit logger (JSONL)
+    └── TPM 2.0 (key generation, signing, NV counter, sealing)
+```
+
+## Credits
+
+vauth is a fork of [fidorium](https://github.com/edg-l/fidorium) by Edgar Luque, which provided the foundational CTAP2/CTAPHID/TPM implementation. Licensed under MIT/Apache-2.0.
+
+## License
+
+MIT OR Apache-2.0
+
+## TODO
+
+- [ ] AUR PKGBUILD
+- [ ] Install script
+- [ ] Cross-browser testing (Chromium)
+- [ ] FIDO Alliance conformance test vectors
+- [ ] Hybrid transport / caBLE (QR code auth from other devices)
+- [ ] Encrypted credential sync (portable passkey support)
+- [ ] Platform authenticator integration (emerging Linux credential-provider APIs)
+- [ ] seccomp filter (restrict syscalls post-init)
+- [ ] TPM policy sessions (bind UV cryptographically to signing, not just type-level gate)

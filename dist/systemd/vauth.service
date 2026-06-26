@@ -1,0 +1,20 @@
+[Unit]
+Description=vauth - Virtual CTAP2 Authenticator
+After=tpm2-abrmd.service
+Wants=tpm2-abrmd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vauth run --audit-log /var/log/vauth/audit.jsonl
+Restart=on-failure
+RestartSec=3
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/log/vauth
+PrivateTmp=yes
+
+# vauth drops privileges internally (root → real user)
+# after TPM + uhid initialization.
+
+[Install]
+WantedBy=multi-user.target
