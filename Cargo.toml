@@ -19,6 +19,7 @@ path = "src/lib.rs"
 name = "vauth"
 path = "src/main.rs"
 
+
 [dependencies]
 uhid-virt  = "0.0.8"
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
@@ -45,6 +46,8 @@ libc       = "0.2"
 time       = "0.3"
 rcgen      = { version = "0.14", features = ["x509-parser"] }
 fd-lock    = "4"
+dlib-face-recognition = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+

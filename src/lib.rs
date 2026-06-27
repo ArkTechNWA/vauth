@@ -1,3 +1,4 @@
+pub mod face;
 pub mod attestation_ca;
 pub mod audit;
 pub mod privsep;
