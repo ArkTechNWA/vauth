@@ -1,8 +1,10 @@
+use super::face_uv::FaceVerifier;
 use super::lockout::LockoutTracker;
 use super::prompt::UpPrompt;
 use crate::ctap2::types::Ctap2Error;
 use crate::ctaphid::packet::encode_response;
 use crate::ctaphid::types::CMD_KEEPALIVE;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
@@ -24,12 +26,56 @@ pub(crate) async fn require_user_verification(
     outgoing_tx: &mpsc::Sender<[u8; 64]>,
     cid: u32,
     cancel: &Arc<AtomicBool>,
+    face: Option<&Arc<FaceVerifier>>,
 ) -> Result<UserPresenceProof, Ctap2Error> {
     if let Some(remaining) = lockout.check_locked() {
         tracing::warn!(remaining_secs = remaining.as_secs(), "UV locked out");
         return Err(Ctap2Error::PinAuthBlocked);
     }
 
+    // --- Face verification (opt-in, fail-safe) ---
+    // Try face first. If it succeeds, skip PAM entirely.
+    // If it fails for ANY reason, fall through to PAM silently.
+    // Face failures do NOT count toward lockout.
+    if let Some(face) = face {
+        if !cancel.load(Ordering::Relaxed) {
+            let face = Arc::clone(face);
+            let face_result = tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                tokio::task::spawn_blocking(move || {
+                    std::panic::catch_unwind(AssertUnwindSafe(|| face.verify()))
+                }),
+            )
+            .await;
+
+            match face_result {
+                // Face succeeded
+                Ok(Ok(Ok(Ok(())))) => {
+                    tracing::info!("face verification succeeded, skipping PAM");
+                    lockout.record_success();
+                    return Ok(UserPresenceProof { _private: () });
+                }
+                // Face returned an error (no match, no face, camera fail, etc.)
+                Ok(Ok(Ok(Err(reason)))) => {
+                    tracing::info!(reason, "face verification failed, falling back to PAM");
+                }
+                // Face panicked (dlib crash, bad model, etc.)
+                Ok(Ok(Err(_panic))) => {
+                    tracing::warn!("face verification panicked, falling back to PAM");
+                }
+                // spawn_blocking join error
+                Ok(Err(join_err)) => {
+                    tracing::warn!(%join_err, "face task join error, falling back to PAM");
+                }
+                // Timeout
+                Err(_) => {
+                    tracing::info!("face verification timed out, falling back to PAM");
+                }
+            }
+        }
+    }
+
+    // --- PAM verification (existing path, unchanged) ---
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
     let tx_keepalive = outgoing_tx.clone();
     tokio::spawn(async move {
@@ -81,7 +127,7 @@ pub(crate) async fn require_user_verification(
 }
 
 /// Get the real (non-root) username, even when running under sudo.
-fn real_username() -> String {
+pub(crate) fn real_username() -> String {
     if let Ok(user) = std::env::var("SUDO_USER") {
         if !user.is_empty() && user != "root" {
             return user;
@@ -110,22 +156,17 @@ fn real_username() -> String {
 }
 
 /// PAM conversation handler that uses zenity for password prompts.
-/// Biometric modules (howdy, fprintd) don't use the conversation —
-/// they talk to hardware directly. When pam_unix asks for a password,
-/// we pop a zenity dialog.
 struct ZenityConversation {
     description: String,
 }
 
 impl pam_client2::ConversationHandler for ZenityConversation {
     fn prompt_echo_on(&mut self, msg: &std::ffi::CStr) -> Result<std::ffi::CString, pam_client2::ErrorCode> {
-        // Echo-on prompts (username etc) — return empty, we already set the user
         let _ = msg;
         std::ffi::CString::new("").map_err(|_| pam_client2::ErrorCode::BUF_ERR)
     }
 
     fn prompt_echo_off(&mut self, msg: &std::ffi::CStr) -> Result<std::ffi::CString, pam_client2::ErrorCode> {
-        // Password prompt — use zenity
         let prompt_text = msg.to_string_lossy();
         tracing::info!(prompt = %prompt_text, "PAM requesting password, launching zenity");
 

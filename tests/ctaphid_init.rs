@@ -57,6 +57,7 @@ async fn test_ctaphid_init_returns_cid() {
         std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
         None,
+        None,
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
 
@@ -128,6 +129,7 @@ async fn test_ctaphid_ping_echo() {
         std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
         None,
+        None,
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));
 
@@ -189,6 +191,7 @@ async fn test_ctaphid_invalid_cmd_returns_error() {
         "vauth".to_string(),
         std::sync::Arc::new(vauth::up::LockoutTracker::new(5, 300)),
         std::sync::Arc::new(UvCache::new(10)),
+        None,
         None,
         std::sync::Arc::new(AuditLog::open(std::path::Path::new("/dev/null")).unwrap()),
     ));

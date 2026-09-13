@@ -27,4 +27,14 @@ pub struct Config {
     /// Delete all stored credentials and reset the TPM NV counter, then exit.
     #[arg(long)]
     pub wipe: bool,
+
+    // --- Face verification (opt-in) ---
+    /// Enable native face verification (tries face before PAM password).
+    pub face_enabled: bool,
+    /// Directory containing dlib model files.
+    pub face_model_dir: String,
+    /// Face match distance threshold (lower = stricter).
+    pub face_threshold: f64,
+    /// Liveness detection timeout in seconds.
+    pub face_liveness_secs: u64,
 }

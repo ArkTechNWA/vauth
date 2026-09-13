@@ -112,6 +112,26 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     // Initialize UV cache (use-once, 10s TTL, source-bound)
     let uv_cache = std::sync::Arc::new(up::UvCache::new(10));
 
+
+    // Initialize face verifier (opt-in, fail-safe)
+    let face: Option<std::sync::Arc<up::FaceVerifier>> = if cfg.face_enabled {
+        let username = up::pam_uv::real_username();
+        let model_dir = std::path::Path::new(&cfg.face_model_dir);
+        match up::FaceVerifier::new(model_dir, &username, cfg.face_threshold, cfg.face_liveness_secs) {
+            Ok(fv) => {
+                tracing::info!("Face verification enabled");
+                Some(std::sync::Arc::new(fv))
+            }
+            Err(e) => {
+                tracing::warn!("Face verification unavailable: {e} — PAM only");
+                None
+            }
+        }
+    } else {
+        tracing::info!("Face verification disabled (pass --face to enable)");
+        None
+    };
+
     // Compute data dir early (needed for lock fallback)
     let data_dir = data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
@@ -197,6 +217,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         lockout,
         uv_cache,
         attestation,
+        face,
         audit,
     )
     .await;

@@ -113,10 +113,16 @@ sudo systemctl enable --now vauth
 ### Run the daemon
 
 ```bash
+# PAM-only mode (default, proven path)
 sudo vauth run -vv --audit-log /var/log/vauth/audit.jsonl
+
+# Face verification + PAM fallback (opt-in)
+sudo vauth run -vv --face --audit-log /var/log/vauth/audit.jsonl
 ```
 
 The daemon starts as root (for TPM + uhid), then drops to your user. Open a browser, navigate to a WebAuthn-enabled site, and register a passkey.
+
+With `--face`, the daemon tries native face verification (camera + liveness + identity) before falling back to PAM password. Face failures never block authentication — they silently fall through to the password dialog.
 
 ### Test face verification
 
@@ -170,6 +176,10 @@ Options:
   --audit-log <PATH>         Audit log path [default: /var/log/vauth/audit.jsonl]
   --max-uv-failures <N>      Failures before lockout [default: 5]
   --lockout-secs <N>         Lockout duration [default: 300]
+  --face                     Enable native face verification (opt-in)
+  --face-model-dir <PATH>    dlib model directory [default: /lib/security/howdy/dlib-data]
+  --face-threshold <F64>     Match distance threshold [default: 0.6]
+  --face-liveness-secs <N>   Liveness timeout [default: 5]
 ```
 
 ## Security
