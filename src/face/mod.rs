@@ -5,6 +5,7 @@
 
 pub mod models;
 pub mod camera;
+pub mod liveness;
 pub mod overlay;
 
 use dlib_face_recognition::{
@@ -29,6 +30,18 @@ pub enum VerifyResult {
     },
     /// No face detected in the frame.
     NoFace,
+}
+
+/// Result of a live verification (liveness + identity).
+#[derive(Debug)]
+pub enum LiveVerifyResult {
+    /// Liveness check failed — no identity check performed.
+    LivenessFailed(liveness::LivenessResult),
+    /// Both checks ran.
+    Completed {
+        liveness: liveness::LivenessResult,
+        identity: VerifyResult,
+    },
 }
 
 /// The face recognition engine. Holds loaded dlib models.
@@ -94,6 +107,41 @@ impl FaceEngine {
             }
         }
         encodings
+    }
+
+    /// Verify a live face against enrolled models.
+    ///
+    /// Opens the camera, runs liveness detection (blink/mouth movement),
+    /// then verifies identity against the enrolled face models.
+    pub fn verify_live(
+        &self,
+        camera_config: &camera::CameraConfig,
+        face_models: &[models::FaceModel],
+        liveness_checker: &liveness::LivenessChecker,
+        liveness_timeout: std::time::Duration,
+    ) -> anyhow::Result<LiveVerifyResult> {
+        let mut session = camera::CameraSession::open(camera_config)?;
+
+        // Step 1: liveness check
+        let liveness_result = liveness_checker.check(&mut session, liveness_timeout)?;
+        match &liveness_result {
+            liveness::LivenessResult::Failed(failure) => {
+                tracing::warn!(?failure, "liveness check failed");
+                return Ok(LiveVerifyResult::LivenessFailed(liveness_result));
+            }
+            liveness::LivenessResult::Alive { blinks, mouth_events, .. } => {
+                tracing::info!(blinks, mouth_events, "liveness confirmed");
+            }
+        }
+
+        // Step 2: capture final frame and verify identity
+        let frame = session.capture_frame()?;
+        let verify = self.verify_with_models(&frame, face_models);
+
+        Ok(LiveVerifyResult::Completed {
+            liveness: liveness_result,
+            identity: verify,
+        })
     }
 
     /// Verify a frame against enrolled face models.

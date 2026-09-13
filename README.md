@@ -10,7 +10,9 @@ vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a 
 ## Features
 
 - **TPM 2.0-bound keys** — private keys generated inside and never exported from the TPM
-- **Face recognition** — howdy-based face auth via PAM, with password fallback (zenity dialog)
+- **Native face recognition** — dlib-based face detection and 128-d encoding, compatible with howdy models
+- **Liveness detection** — EAR (eye blink) and MAR (mouth movement) via 68-point landmarks, prevents photo spoofing
+- **Camera capture** — V4L2 via nokhwa at ~27 fps (release build)
 - **Packed attestation** — self-signed CA with x5c certificate chain for enterprise enforcement
 - **Privilege separation** — drops from root to real user after init, retains only `CAP_DAC_READ_SEARCH`
 - **Audit logging** — single JSONL file, every operation logged with RP, user, result, counter
@@ -26,10 +28,27 @@ vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a 
 - Rust 1.91+
 - `libpam` (PAM development headers)
 - `tpm2-tss` (TPM2 Software Stack)
+- V4L2-compatible webcam
+
+### dlib models
+
+The face engine requires dlib model files. If you have [howdy](https://github.com/boltgolt/howdy) installed, the models are already at `/lib/security/howdy/dlib-data/`.
+
+Required models:
+- `shape_predictor_5_face_landmarks.dat` — face alignment for encoding
+- `dlib_face_recognition_resnet_model_v1.dat` — 128-d face encoding
+- `shape_predictor_68_face_landmarks.dat` — liveness detection (EAR/MAR)
+
+To download the 68-point model (required for liveness):
+```bash
+wget http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
+bunzip2 shape_predictor_68_face_landmarks.dat.bz2
+sudo mv shape_predictor_68_face_landmarks.dat /lib/security/howdy/dlib-data/
+```
 
 ### Optional
 
-- [howdy](https://github.com/boltgolt/howdy) — face recognition via PAM
+- [howdy](https://github.com/boltgolt/howdy) — provides dlib models and enrolled face data
 - `zenity` — GUI password dialog fallback
 
 ## Building
@@ -99,6 +118,18 @@ sudo vauth run -vv --audit-log /var/log/vauth/audit.jsonl
 
 The daemon starts as root (for TPM + uhid), then drops to your user. Open a browser, navigate to a WebAuthn-enabled site, and register a passkey.
 
+### Test face verification
+
+The `vauth_verify` binary tests the face recognition and liveness pipeline:
+
+```bash
+# Full liveness + identity verification
+./target/release/vauth_verify
+
+# Diagnostic mode — shows EAR/MAR per frame + identity
+./target/release/vauth_verify --diag
+```
+
 ### Manage credentials
 
 ```bash
@@ -148,6 +179,7 @@ See [THREAT_MODEL.md](THREAT_MODEL.md) for a detailed analysis of what vauth doe
 Key points:
 - Private keys never leave the TPM
 - Every signing operation requires fresh user verification
+- Liveness detection prevents static image bypass (blink or mouth movement required)
 - The daemon runs as an unprivileged user after initialization
 - A compromised local OS can bypass all protections — no software authenticator can prevent this
 
@@ -160,7 +192,11 @@ Browser (WebAuthn JS API)
 vauth daemon (unprivileged after init)
     ├── CTAPHID framing + dispatch
     ├── CTAP2 protocol (makeCredential, getAssertion, getInfo)
-    ├── PAM user verification (howdy face → password fallback)
+    ├── Face verification pipeline
+    │   ├── Camera capture (V4L2 via nokhwa, ~27 fps)
+    │   ├── Liveness detection (68-point landmarks → EAR/MAR)
+    │   └── Identity verification (5-point landmarks → 128-d encoding)
+    ├── PAM fallback (password via zenity dialog)
     ├── UV cache (CID+RP bound, use-once, TTL)
     ├── Attestation signing (device cert + CA chain)
     ├── Audit logger (JSONL)
@@ -179,6 +215,7 @@ MIT OR Apache-2.0
 
 - [ ] AUR PKGBUILD
 - [ ] Install script
+- [ ] GTK4 verification overlay UI (Milestone 3)
 - [ ] Cross-browser testing (Chromium)
 - [ ] FIDO Alliance conformance test vectors
 - [ ] Hybrid transport / caBLE (QR code auth from other devices)

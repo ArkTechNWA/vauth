@@ -1,0 +1,22 @@
+[package]
+name = "uhidrs-sys"
+version = "1.0.4"
+authors = ["Luke Jones <luke@ljones.dev>", "Daniel Stiner <danstiner@gmail.com>"]
+description = "FFI bindings to Linux UHID (user-space HID transport drivers)"
+license = "MIT"
+keywords = ["uhid"]
+categories = ["external-ffi-bindings"]
+documentation = "https://docs.rs/uhidrs-sys/"
+repository = "https://github.com/flukejones/uhidrs-sys"
+include = [
+    "src/*.rs",
+    "wrapper.h",
+    "build.rs",
+    "Cargo.toml",
+]
+
+[dependencies]
+[build-dependencies.bindgen]
+version = "0.71.1"
+default-features = false
+#features = ["logging"]
