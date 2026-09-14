@@ -13,6 +13,7 @@ vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a 
 - **Native face recognition** — dlib-based face detection and 128-d encoding, compatible with howdy models
 - **Liveness detection** — EAR (eye blink) and MAR (mouth movement) via 68-point landmarks, prevents photo spoofing
 - **Camera capture** — V4L2 via nokhwa at ~27 fps (release build)
+- **GTK4 verification overlay** — circle-masked camera feed, timeout ring, Caelestia theme colors (optional `gtk-overlay` feature)
 - **Packed attestation** — self-signed CA with x5c certificate chain for enterprise enforcement
 - **Privilege separation** — drops from root to real user after init, retains only `CAP_DAC_READ_SEARCH`
 - **Audit logging** — single JSONL file, every operation logged with RP, user, result, counter
@@ -50,11 +51,16 @@ sudo mv shape_predictor_68_face_landmarks.dat /lib/security/howdy/dlib-data/
 
 - [howdy](https://github.com/boltgolt/howdy) — provides dlib models and enrolled face data
 - `zenity` — GUI password dialog fallback
+- `gtk4`, `libgtk4-layer-shell` — for the face verification overlay (build with `--features gtk-overlay`)
 
 ## Building
 
 ```bash
+# Headless (no GUI overlay)
 cargo build --release
+
+# With GTK4 face verification overlay
+cargo build --release --features gtk-overlay
 ```
 
 The binary is at `target/release/vauth`.
@@ -78,14 +84,12 @@ sudo usermod -aG input $USER
 
 ```bash
 sudo cp dist/pam.d/vauth /etc/pam.d/
+
+# If using --face (native face verification), install the password-only PAM config:
+sudo cp dist/pam.d/vauth-face /etc/pam.d/
 ```
 
-Edit `/etc/pam.d/vauth` to match your system. The default config tries howdy (face), then falls back to password:
-
-```
-auth    sufficient    pam_python.so /lib/security/howdy/pam.py
-auth    required      pam_unix.so nullok
-```
+The default `vauth` PAM config tries howdy (face), then password. When `--face` is enabled, the daemon automatically uses `vauth-face` (password-only) since native face verification replaces howdy.
 
 ### 3. Attestation (optional)
 
@@ -100,7 +104,19 @@ The CA cert can be imported into your identity provider (e.g., Authentik) to enf
 ~/.local/share/fidorium/attestation_ca.pem
 ```
 
-### 4. Systemd service (optional)
+### 4. Hyprland/Caelestia window rule (if using GTK overlay)
+
+Add to your `~/.config/hypr/hyprland.lua`:
+```lua
+hl.window_rule({
+    name  = "vauth-face-overlay",
+    match = { class = "GTK Application" },
+    float = true,
+    pin   = true,
+})
+```
+
+### 5. Systemd service (optional)
 
 ```bash
 sudo cp dist/systemd/vauth.service /etc/systemd/system/
@@ -205,7 +221,8 @@ vauth daemon (unprivileged after init)
     ├── Face verification pipeline
     │   ├── Camera capture (V4L2 via nokhwa, ~27 fps)
     │   ├── Liveness detection (68-point landmarks → EAR/MAR)
-    │   └── Identity verification (5-point landmarks → 128-d encoding)
+    │   ├── Identity verification (5-point landmarks → 128-d encoding)
+    │   └── GTK4 overlay (circle mask, timeout ring, theme-aware)
     ├── PAM fallback (password via zenity dialog)
     ├── UV cache (CID+RP bound, use-once, TTL)
     ├── Attestation signing (device cert + CA chain)
@@ -225,7 +242,6 @@ MIT OR Apache-2.0
 
 - [ ] AUR PKGBUILD
 - [ ] Install script
-- [ ] GTK4 verification overlay UI (Milestone 3)
 - [ ] Cross-browser testing (Chromium)
 - [ ] FIDO Alliance conformance test vectors
 - [ ] Hybrid transport / caBLE (QR code auth from other devices)
