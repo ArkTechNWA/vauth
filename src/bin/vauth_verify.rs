@@ -108,7 +108,7 @@ fn main() -> anyhow::Result<()> {
         println!("[*] Look at the camera — blink or open your mouth!");
         println!("[*] You have 8 seconds...\n");
 
-        let liveness_result = liveness.check(&mut session, Duration::from_secs(8))?;
+        let liveness_result = liveness.check(&mut session, Duration::from_secs(8), None)?;
         match &liveness_result {
             LivenessResult::Alive { blinks, mouth_events, frames_analyzed } => {
                 println!("[+] LIVENESS PASSED: {} blink(s), {} mouth event(s), {} frames",

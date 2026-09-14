@@ -123,7 +123,7 @@ impl FaceEngine {
         let mut session = camera::CameraSession::open(camera_config)?;
 
         // Step 1: liveness check
-        let liveness_result = liveness_checker.check(&mut session, liveness_timeout)?;
+        let liveness_result = liveness_checker.check(&mut session, liveness_timeout, None)?;
         match &liveness_result {
             liveness::LivenessResult::Failed(failure) => {
                 tracing::warn!(?failure, "liveness check failed");

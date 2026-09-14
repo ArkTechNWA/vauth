@@ -7,6 +7,7 @@
 use crate::face::camera::CameraConfig;
 use crate::face::liveness::{LivenessChecker, LivenessResult};
 use crate::face::models::FaceModel;
+use crate::face::overlay;
 use crate::face::{FaceEngine, VerifyResult};
 use std::path::Path;
 use std::time::Duration;
@@ -91,16 +92,21 @@ impl FaceVerifier {
     ///
     /// Returns Ok(()) on successful verification, Err(reason) on any failure.
     pub fn verify(&self) -> Result<(), String> {
+        // Spawn overlay window (no-op without gtk-overlay feature or if display unavailable)
+        let (overlay_handle, overlay_sender) = overlay::spawn_overlay();
+
         let mut session = crate::face::camera::CameraSession::open(&self.camera_config)
             .map_err(|e| format!("camera: {e}"))?;
 
         let liveness_result = self
             .liveness
-            .check(&mut session, self.liveness_timeout)
+            .check(&mut session, self.liveness_timeout, overlay_sender.sender())
             .map_err(|e| format!("liveness error: {e}"))?;
 
         match &liveness_result {
             LivenessResult::Failed(failure) => {
+                overlay_sender.send_final(false);
+                drop(overlay_handle);
                 return Err(format!("liveness failed: {failure:?}"));
             }
             LivenessResult::Alive {
@@ -116,7 +122,7 @@ impl FaceVerifier {
             .capture_frame()
             .map_err(|e| format!("capture: {e}"))?;
 
-        match self.engine.verify_with_models(&frame, &self.models) {
+        let result = match self.engine.verify_with_models(&frame, &self.models) {
             VerifyResult::Match {
                 model_label,
                 distance,
@@ -126,12 +132,20 @@ impl FaceVerifier {
                     distance = format!("{distance:.4}"),
                     "face identity match"
                 );
+                overlay_sender.send_final(true);
                 Ok(())
             }
             VerifyResult::NoMatch { best_distance } => {
+                overlay_sender.send_final(false);
                 Err(format!("no identity match (best distance: {best_distance:.4})"))
             }
-            VerifyResult::NoFace => Err("no face in verification frame".into()),
-        }
+            VerifyResult::NoFace => {
+                overlay_sender.send_final(false);
+                Err("no face in verification frame".into())
+            }
+        };
+
+        drop(overlay_handle);
+        result
     }
 }

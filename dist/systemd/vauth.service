@@ -7,7 +7,7 @@ Wants=tpm2-abrmd.service
 Type=simple
 
 # Set YOUR username here:
-ExecStart=/usr/local/bin/vauth run --run-as-user meldrey --audit-log /var/log/vauth/audit.jsonl
+ExecStart=/usr/local/bin/vauth run --run-as-user meldrey --audit-log /var/log/vauth/audit.jsonl --face
 
 Restart=on-failure
 RestartSec=3
@@ -17,7 +17,12 @@ ProtectSystem=strict
 ProtectHome=no
 ReadWritePaths=/var/log/vauth
 ReadWritePaths=/home/meldrey/.local/share/fidorium
+ReadOnlyPaths=/lib/security/howdy/dlib-data
 PrivateTmp=yes
+
+# Face verification needs camera access
+DeviceAllow=/dev/video0 rw
+DeviceAllow=/dev/video1 rw
 
 # vauth drops privileges internally after TPM + uhid init.
 

@@ -28,6 +28,7 @@ pub fn drop_privileges() -> anyhow::Result<()> {
     //    (needed for zenity password dialog and howdy camera access)
     let display = std::env::var("DISPLAY").ok();
     let wayland = std::env::var("WAYLAND_DISPLAY").ok();
+    let hyprland_sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok();
     let xdg_runtime = format!("/run/user/{target_uid}");
 
     // 1. Set PR_SET_KEEPCAPS so capabilities survive the UID change
@@ -66,8 +67,44 @@ pub fn drop_privileges() -> anyhow::Result<()> {
         if let Some(d) = display {
             std::env::set_var("DISPLAY", d);
         }
-        if let Some(w) = wayland {
+        if let Some(ref w) = wayland {
             std::env::set_var("WAYLAND_DISPLAY", w);
+            // Force GTK4 to use Wayland backend for layer-shell overlay support.
+            // When both DISPLAY and WAYLAND_DISPLAY are set, GDK defaults to X11.
+            std::env::set_var("GDK_BACKEND", "wayland");
+        }
+        // Discover Hyprland IPC signature from filesystem if not in env.
+        // sudo strips HYPRLAND_INSTANCE_SIGNATURE, but the socket dir survives.
+        let hypr_sig = hyprland_sig.or_else(|| {
+            let hypr_dir = format!("/run/user/{target_uid}/hypr");
+            std::fs::read_dir(&hypr_dir).ok().and_then(|mut entries| {
+                entries.find_map(|e| {
+                    let e = e.ok()?;
+                    if e.path().join(".socket.sock").exists() {
+                        e.file_name().into_string().ok()
+                    } else {
+                        None
+                    }
+                })
+            })
+        });
+        if let Some(ref sig) = hypr_sig {
+            std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", sig);
+        }
+        // Also discover WAYLAND_DISPLAY if sudo stripped it
+        if wayland.is_none() {
+            let xdg = format!("/run/user/{target_uid}");
+            if let Ok(entries) = std::fs::read_dir(&xdg) {
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if name.starts_with("wayland-") && !name.ends_with(".lock") {
+                            std::env::set_var("WAYLAND_DISPLAY", name);
+                            std::env::set_var("GDK_BACKEND", "wayland");
+                            break;
+                        }
+                    }
+                }
+            }
         }
         std::env::set_var("XDG_RUNTIME_DIR", &xdg_runtime);
         std::env::set_var("HOME", format!("/home/{username}"));

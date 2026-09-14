@@ -96,7 +96,7 @@ fn main() -> anyhow::Result<()> {
                 verbose: cli.verbose,
                 tpm_device: cli.tpm_device,
                 nv_index: cli.nv_index,
-                pam_service,
+                pam_service: if face { "vauth-face".to_string() } else { pam_service },
                 audit_log,
                 max_uv_failures,
                 lockout_secs,

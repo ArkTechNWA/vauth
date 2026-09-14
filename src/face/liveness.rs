@@ -6,10 +6,12 @@
 use anyhow::Result;
 use dlib_face_recognition::{
     FaceDetector, FaceDetectorTrait,
+    ImageMatrix,
     LandmarkPredictor, LandmarkPredictorTrait,
     Point,
 };
 use std::path::Path;
+use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 use super::camera::CameraSession;
@@ -24,10 +26,30 @@ const INNER_MOUTH_LEFT: usize = 60;
 const INNER_MOUTH_RIGHT: usize = 64;
 
 // Thresholds tuned for dlib's 68-point model.
-const EAR_BLINK_THRESHOLD: f64 = 0.21;
-const EAR_OPEN_THRESHOLD: f64 = 0.23;
-const MAR_OPEN_THRESHOLD: f64 = 0.3;
-const MAR_CLOSED_THRESHOLD: f64 = 0.15;
+pub const EAR_BLINK_THRESHOLD: f64 = 0.21;
+pub const EAR_OPEN_THRESHOLD: f64 = 0.23;
+pub const MAR_OPEN_THRESHOLD: f64 = 0.3;
+pub const MAR_CLOSED_THRESHOLD: f64 = 0.15;
+
+/// Per-frame progress snapshot pushed to the overlay (if active).
+#[derive(Debug, Clone, Default)]
+pub struct LivenessFrame {
+    /// Raw RGB8 pixels, row-major, `width * height * 3` bytes.
+    /// Empty vec = sentinel frame (final_status is set).
+    pub rgb: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub face_detected: bool,
+    /// Average Eye Aspect Ratio. 0.0 if no face detected.
+    pub ear: f64,
+    /// Mouth Aspect Ratio. 0.0 if no face detected.
+    pub mar: f64,
+    pub blinks: u32,
+    pub mouth_events: u32,
+    pub time_remaining_secs: f32,
+    /// None = in-progress frame. Some(true) = verified. Some(false) = failed.
+    pub final_status: Option<bool>,
+}
 
 /// Result of a liveness check.
 #[derive(Debug, Clone)]
@@ -55,7 +77,8 @@ pub enum LivenessFailure {
 
 /// Tracks EAR/MAR state transitions across frames.
 struct MotionTracker {
-    // Blink: eyes open → closed → open
+    // Blink: eyes must be FULLY open first, then closed, then open again
+    eyes_confirmed_open: bool,
     eyes_were_open: bool,
     eyes_closed: bool,
     blinks: u32,
@@ -68,6 +91,7 @@ struct MotionTracker {
 impl MotionTracker {
     fn new() -> Self {
         Self {
+            eyes_confirmed_open: false,
             eyes_were_open: false,
             eyes_closed: false,
             blinks: 0,
@@ -78,15 +102,28 @@ impl MotionTracker {
     }
 
     fn update(&mut self, ear: f64, mar: f64) {
-        // Track blinks: open → closed → open = 1 blink
-        if ear > EAR_OPEN_THRESHOLD {
-            if self.eyes_closed {
-                self.blinks += 1;
-                self.eyes_closed = false;
+        // Track blinks: fully open → closed → open = 1 blink.
+        // Eyes must reach FULLY open (EAR > 0.28) at least once before
+        // blink tracking begins. This prevents false blinks from a high
+        // camera angle where resting EAR hovers near the threshold.
+        const EAR_FULLY_OPEN: f64 = 0.28;
+
+        if !self.eyes_confirmed_open {
+            // Wait for a clear, unambiguous "eyes open" frame
+            if ear > EAR_FULLY_OPEN {
+                self.eyes_confirmed_open = true;
+                self.eyes_were_open = true;
             }
-            self.eyes_were_open = true;
-        } else if ear < EAR_BLINK_THRESHOLD && self.eyes_were_open {
-            self.eyes_closed = true;
+        } else {
+            if ear > EAR_OPEN_THRESHOLD {
+                if self.eyes_closed {
+                    self.blinks += 1;
+                    self.eyes_closed = false;
+                }
+                self.eyes_were_open = true;
+            } else if ear < EAR_BLINK_THRESHOLD && self.eyes_were_open {
+                self.eyes_closed = true;
+            }
         }
 
         // Track mouth: closed → open → closed = 1 event
@@ -144,10 +181,14 @@ impl LivenessChecker {
     ///
     /// Captures frames until a blink or mouth event is detected,
     /// or the timeout expires.
+    ///
+    /// If `progress` is provided, per-frame snapshots are pushed via `try_send`
+    /// (non-blocking — frames are silently dropped if the receiver is slow).
     pub fn check(
         &self,
         session: &mut CameraSession,
         timeout: Duration,
+        progress: Option<&SyncSender<LivenessFrame>>,
     ) -> Result<LivenessResult> {
         let deadline = Instant::now() + timeout;
         let mut tracker = MotionTracker::new();
@@ -155,26 +196,47 @@ impl LivenessChecker {
         let mut any_face = false;
 
         while Instant::now() < deadline {
-            let image = match session.capture_frame() {
+            let rgb_image = match session.capture_rgb() {
                 Ok(img) => img,
                 Err(_) => continue, // dropped frame, try again
             };
             frames += 1;
 
+            let image = ImageMatrix::from_image(&rgb_image);
             let locations = self.detector.face_locations(&image);
-            let Some(rect) = locations.first() else {
-                continue;
-            };
-            any_face = true;
+            let face_detected;
+            let mut ear = 0.0;
+            let mut mar_val = 0.0;
 
-            let landmarks = self.predictor.face_landmarks(&image, rect);
-            if landmarks.len() < 68 {
-                continue;
+            if let Some(rect) = locations.first() {
+                face_detected = true;
+                any_face = true;
+
+                let landmarks = self.predictor.face_landmarks(&image, rect);
+                if landmarks.len() >= 68 {
+                    ear = avg_ear(&landmarks);
+                    mar_val = mar(&landmarks);
+                    tracker.update(ear, mar_val);
+                }
+            } else {
+                face_detected = false;
             }
 
-            let ear = avg_ear(&landmarks);
-            let mar = mar(&landmarks);
-            tracker.update(ear, mar);
+            if let Some(tx) = progress {
+                let remaining = deadline.saturating_duration_since(Instant::now()).as_secs_f32();
+                let _ = tx.try_send(LivenessFrame {
+                    rgb: rgb_image.as_raw().clone(),
+                    width: rgb_image.width(),
+                    height: rgb_image.height(),
+                    face_detected,
+                    ear,
+                    mar: mar_val,
+                    blinks: tracker.blinks,
+                    mouth_events: tracker.mouth_events,
+                    time_remaining_secs: remaining,
+                    final_status: None,
+                });
+            }
 
             if tracker.is_alive() {
                 return Ok(LivenessResult::Alive {
@@ -345,14 +407,32 @@ mod tests {
     #[test]
     fn test_blink_detection() {
         let mut tracker = MotionTracker::new();
-        // Simulate: open → closed → open
-        tracker.update(0.30, 0.1); // eyes open
+        // Must see fully open (>0.28) first
+        tracker.update(0.30, 0.1); // eyes fully open — confirms tracking
         assert_eq!(tracker.blinks, 0);
+        assert!(tracker.eyes_confirmed_open);
         tracker.update(0.15, 0.1); // eyes closed
         assert_eq!(tracker.blinks, 0);
         tracker.update(0.30, 0.1); // eyes reopen → blink counted
         assert_eq!(tracker.blinks, 1);
         assert!(tracker.is_alive());
+    }
+
+    #[test]
+    fn test_partial_open_does_not_trigger_blink() {
+        let mut tracker = MotionTracker::new();
+        // Camera high — resting EAR at 0.24 (above OPEN but below FULLY_OPEN)
+        tracker.update(0.24, 0.1); // partial open — NOT confirmed
+        assert!(!tracker.eyes_confirmed_open);
+        tracker.update(0.20, 0.1); // dips below blink threshold
+        tracker.update(0.24, 0.1); // comes back up
+        assert_eq!(tracker.blinks, 0, "partial open should not count as blink");
+        // Now actually open eyes wide
+        tracker.update(0.30, 0.1); // fully open — confirms tracking
+        assert!(tracker.eyes_confirmed_open);
+        tracker.update(0.15, 0.1); // real blink
+        tracker.update(0.30, 0.1); // reopen
+        assert_eq!(tracker.blinks, 1);
     }
 
     #[test]
