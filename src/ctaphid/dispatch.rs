@@ -12,6 +12,7 @@ use crate::tpm::TpmContext;
 use crate::up::LockoutTracker;
 use crate::attestation_ca::AttestationState;
 use crate::up::UvCache;
+use crate::up::FaceVerifier;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -31,6 +32,7 @@ pub async fn run_ctaphid_loop(
     lockout: Arc<LockoutTracker>,
     uv_cache: Arc<UvCache>,
     attestation: Option<Arc<AttestationState>>,
+    face: Option<Arc<FaceVerifier>>,
     audit: Arc<AuditLog>,
 ) {
     let mut manager = ChannelManager::new(MAX_CHANNELS);
@@ -70,11 +72,12 @@ pub async fn run_ctaphid_loop(
                     let uv_cache2 = Arc::clone(&uv_cache);
                     let att2 = attestation.clone();
                     let audit2 = Arc::clone(&audit);
+                    let face2 = face.clone();
                     let cid = msg.cid;
                     tokio::spawn(async move {
                         let response = ctap2::dispatch_cbor(
                             msg, &tpm2, &store2, nv_index, &pam_svc,
-                            &lockout2, &uv_cache2, att2.as_ref(), &audit2, &tx, &cancel2,
+                            &lockout2, &uv_cache2, att2.as_ref(), face2.as_ref(), &audit2, &tx, &cancel2,
                         )
                         .await;
                         for pkt in encode_response(cid, CMD_CBOR, &response) {

@@ -10,7 +10,10 @@ vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a 
 ## Features
 
 - **TPM 2.0-bound keys** — private keys generated inside and never exported from the TPM
-- **Face recognition** — howdy-based face auth via PAM, with password fallback (zenity dialog)
+- **Native face recognition** — dlib-based face detection and 128-d encoding, compatible with howdy models
+- **Liveness detection** — EAR (eye blink) and MAR (mouth movement) via 68-point landmarks, prevents photo spoofing
+- **Camera capture** — V4L2 via nokhwa at ~27 fps (release build)
+- **GTK4 verification overlay** — circle-masked camera feed, timeout ring, Caelestia theme colors (optional `gtk-overlay` feature)
 - **Packed attestation** — self-signed CA with x5c certificate chain for enterprise enforcement
 - **Privilege separation** — drops from root to real user after init, retains only `CAP_DAC_READ_SEARCH`
 - **Audit logging** — single JSONL file, every operation logged with RP, user, result, counter
@@ -26,16 +29,38 @@ vauth creates a virtual FIDO2 security key via Linux uhid. Browsers see it as a 
 - Rust 1.91+
 - `libpam` (PAM development headers)
 - `tpm2-tss` (TPM2 Software Stack)
+- V4L2-compatible webcam
+
+### dlib models
+
+The face engine requires dlib model files. If you have [howdy](https://github.com/boltgolt/howdy) installed, the models are already at `/lib/security/howdy/dlib-data/`.
+
+Required models:
+- `shape_predictor_5_face_landmarks.dat` — face alignment for encoding
+- `dlib_face_recognition_resnet_model_v1.dat` — 128-d face encoding
+- `shape_predictor_68_face_landmarks.dat` — liveness detection (EAR/MAR)
+
+To download the 68-point model (required for liveness):
+```bash
+wget http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
+bunzip2 shape_predictor_68_face_landmarks.dat.bz2
+sudo mv shape_predictor_68_face_landmarks.dat /lib/security/howdy/dlib-data/
+```
 
 ### Optional
 
-- [howdy](https://github.com/boltgolt/howdy) — face recognition via PAM
+- [howdy](https://github.com/boltgolt/howdy) — provides dlib models and enrolled face data
 - `zenity` — GUI password dialog fallback
+- `gtk4`, `libgtk4-layer-shell` — for the face verification overlay (build with `--features gtk-overlay`)
 
 ## Building
 
 ```bash
+# Headless (no GUI overlay)
 cargo build --release
+
+# With GTK4 face verification overlay
+cargo build --release --features gtk-overlay
 ```
 
 The binary is at `target/release/vauth`.
@@ -59,14 +84,12 @@ sudo usermod -aG input $USER
 
 ```bash
 sudo cp dist/pam.d/vauth /etc/pam.d/
+
+# If using --face (native face verification), install the password-only PAM config:
+sudo cp dist/pam.d/vauth-face /etc/pam.d/
 ```
 
-Edit `/etc/pam.d/vauth` to match your system. The default config tries howdy (face), then falls back to password:
-
-```
-auth    sufficient    pam_python.so /lib/security/howdy/pam.py
-auth    required      pam_unix.so nullok
-```
+The default `vauth` PAM config tries howdy (face), then password. When `--face` is enabled, the daemon automatically uses `vauth-face` (password-only) since native face verification replaces howdy.
 
 ### 3. Attestation (optional)
 
@@ -81,7 +104,19 @@ The CA cert can be imported into your identity provider (e.g., Authentik) to enf
 ~/.local/share/fidorium/attestation_ca.pem
 ```
 
-### 4. Systemd service (optional)
+### 4. Hyprland/Caelestia window rule (if using GTK overlay)
+
+Add to your `~/.config/hypr/hyprland.lua`:
+```lua
+hl.window_rule({
+    name  = "vauth-face-overlay",
+    match = { class = "GTK Application" },
+    float = true,
+    pin   = true,
+})
+```
+
+### 5. Systemd service (optional)
 
 ```bash
 sudo cp dist/systemd/vauth.service /etc/systemd/system/
@@ -94,10 +129,28 @@ sudo systemctl enable --now vauth
 ### Run the daemon
 
 ```bash
+# PAM-only mode (default, proven path)
 sudo vauth run -vv --audit-log /var/log/vauth/audit.jsonl
+
+# Face verification + PAM fallback (opt-in)
+sudo vauth run -vv --face --audit-log /var/log/vauth/audit.jsonl
 ```
 
 The daemon starts as root (for TPM + uhid), then drops to your user. Open a browser, navigate to a WebAuthn-enabled site, and register a passkey.
+
+With `--face`, the daemon tries native face verification (camera + liveness + identity) before falling back to PAM password. Face failures never block authentication — they silently fall through to the password dialog.
+
+### Test face verification
+
+The `vauth_verify` binary tests the face recognition and liveness pipeline:
+
+```bash
+# Full liveness + identity verification
+./target/release/vauth_verify
+
+# Diagnostic mode — shows EAR/MAR per frame + identity
+./target/release/vauth_verify --diag
+```
 
 ### Manage credentials
 
@@ -139,6 +192,10 @@ Options:
   --audit-log <PATH>         Audit log path [default: /var/log/vauth/audit.jsonl]
   --max-uv-failures <N>      Failures before lockout [default: 5]
   --lockout-secs <N>         Lockout duration [default: 300]
+  --face                     Enable native face verification (opt-in)
+  --face-model-dir <PATH>    dlib model directory [default: /lib/security/howdy/dlib-data]
+  --face-threshold <F64>     Match distance threshold [default: 0.6]
+  --face-liveness-secs <N>   Liveness timeout [default: 5]
 ```
 
 ## Security
@@ -148,6 +205,7 @@ See [THREAT_MODEL.md](THREAT_MODEL.md) for a detailed analysis of what vauth doe
 Key points:
 - Private keys never leave the TPM
 - Every signing operation requires fresh user verification
+- Liveness detection prevents static image bypass (blink or mouth movement required)
 - The daemon runs as an unprivileged user after initialization
 - A compromised local OS can bypass all protections — no software authenticator can prevent this
 
@@ -160,7 +218,12 @@ Browser (WebAuthn JS API)
 vauth daemon (unprivileged after init)
     ├── CTAPHID framing + dispatch
     ├── CTAP2 protocol (makeCredential, getAssertion, getInfo)
-    ├── PAM user verification (howdy face → password fallback)
+    ├── Face verification pipeline
+    │   ├── Camera capture (V4L2 via nokhwa, ~27 fps)
+    │   ├── Liveness detection (68-point landmarks → EAR/MAR)
+    │   ├── Identity verification (5-point landmarks → 128-d encoding)
+    │   └── GTK4 overlay (circle mask, timeout ring, theme-aware)
+    ├── PAM fallback (password via zenity dialog)
     ├── UV cache (CID+RP bound, use-once, TTL)
     ├── Attestation signing (device cert + CA chain)
     ├── Audit logger (JSONL)

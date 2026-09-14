@@ -1,0 +1,5 @@
+# PAM service for vauth with native face engine (--face flag)
+# Face verification is handled by vauth directly — howdy is not needed.
+# PAM only provides password fallback.
+
+auth    required    pam_unix.so nullok

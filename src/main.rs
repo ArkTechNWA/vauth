@@ -30,6 +30,18 @@ enum Command {
         max_uv_failures: u32,
         #[arg(long, default_value = "300")]
         lockout_secs: u64,
+        /// Enable native face verification (tries face before PAM password)
+        #[arg(long)]
+        face: bool,
+        /// Directory containing dlib model files
+        #[arg(long, default_value = "/lib/security/howdy/dlib-data")]
+        face_model_dir: String,
+        /// Face match distance threshold (lower = stricter)
+        #[arg(long, default_value = "0.6")]
+        face_threshold: f64,
+        /// Liveness detection timeout in seconds
+        #[arg(long, default_value = "5")]
+        face_liveness_secs: u64,
     },
     /// List all stored credentials
     List,
@@ -58,6 +70,10 @@ fn main() -> anyhow::Result<()> {
         audit_log: "/var/log/vauth/audit.jsonl".to_string(),
         max_uv_failures: 5,
         lockout_secs: 300,
+        face: false,
+        face_model_dir: "/lib/security/howdy/dlib-data".to_string(),
+        face_threshold: 0.6,
+        face_liveness_secs: 5,
     });
 
     match command {
@@ -67,6 +83,10 @@ fn main() -> anyhow::Result<()> {
             audit_log,
             max_uv_failures,
             lockout_secs,
+            face,
+            face_model_dir,
+            face_threshold,
+            face_liveness_secs,
         } => {
             if let Some(user) = run_as_user {
                 // SAFETY: single-threaded at this point
@@ -76,11 +96,15 @@ fn main() -> anyhow::Result<()> {
                 verbose: cli.verbose,
                 tpm_device: cli.tpm_device,
                 nv_index: cli.nv_index,
-                pam_service,
+                pam_service: if face { "vauth-face".to_string() } else { pam_service },
                 audit_log,
                 max_uv_failures,
                 lockout_secs,
                 wipe: false,
+                face_enabled: face,
+                face_model_dir,
+                face_threshold,
+                face_liveness_secs,
             };
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -97,6 +121,10 @@ fn main() -> anyhow::Result<()> {
                 max_uv_failures: 5,
                 lockout_secs: 300,
                 wipe: true,
+                face_enabled: false,
+                face_model_dir: String::new(),
+                face_threshold: 0.6,
+                face_liveness_secs: 5,
             };
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -251,7 +279,7 @@ fn cmd_revoke(tpm_device: &str, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_setup_attestation(tpm_device: &str) -> anyhow::Result<()> {
+fn cmd_setup_attestation(_tpm_device: &str) -> anyhow::Result<()> {
     let data_dir = vauth::data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
 

@@ -11,6 +11,7 @@ use crate::store::{CredentialRecord, CredentialStore};
 use crate::tpm::{self, TpmContext};
 use crate::up::LockoutTracker;
 use crate::up::UvCache;
+use crate::up::FaceVerifier;
 
 fn select_credential(
     store: &CredentialStore,
@@ -42,6 +43,7 @@ pub(crate) async fn handle_get_assertion(
     pam_service: &str,
     lockout: &Arc<LockoutTracker>,
     uv_cache: &Arc<UvCache>,
+    face: Option<&Arc<FaceVerifier>>,
     audit: &Arc<AuditLog>,
     cid: u32,
     outgoing_tx: &mpsc::Sender<[u8; 64]>,
@@ -70,7 +72,7 @@ pub(crate) async fn handle_get_assertion(
             cred.user_name.as_deref(),
         );
         match crate::up::require_user_verification(
-            &prompt, pam_service, lockout, outgoing_tx, cid, cancel,
+            &prompt, pam_service, lockout, outgoing_tx, cid, cancel, face,
         ).await {
             Ok(p) => {
                 uv_cache.store(cid, &req.rp_id);
